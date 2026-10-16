@@ -1,0 +1,1 @@
+"""Motor de audio: generación de estímulos, calibración y reproducción."""
