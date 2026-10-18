@@ -26,8 +26,8 @@ jobs:
       - name: Herramientas del sistema y Buildozer
         run: |
           sudo apt-get update
-          sudo apt-get install -y git zip unzip autoconf automake libtool pkg-config \
-               zlib1g-dev libncurses-dev cmake libffi-dev libssl-dev
+          sudo apt-get install -y git zip unzip autoconf automake libtool libltdl-dev \
+               gettext pkg-config zlib1g-dev libncurses-dev cmake libffi-dev libssl-dev
           pip install buildozer cython==0.29.36
 
       - name: Caché de Buildozer (acelera las siguientes compilaciones)
@@ -36,7 +36,7 @@ jobs:
           path: |
             ~/.buildozer
             .buildozer
-          key: buildozer-${{ hashFiles('buildozer.spec') }}
+          key: buildozer-v2-${{ hashFiles('buildozer.spec') }}
 
       - name: Compilar el APK
         run: python ci_build.py
