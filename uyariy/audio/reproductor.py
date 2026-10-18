@@ -1,10 +1,9 @@
 """
 Reproductor de audio con dos "backends":
 
-  * Android  -> android.media.AudioTrack en modo STREAM (vía pyjnius).
-                Prefiere PCM FLOAT para que los niveles muy bajos (cerca de
-                0 dB HL, ~ -90 dBFS) no se pierdan por cuantización; si la
-                tableta no lo admite, usa PCM 16 bits con dither.
+  * Android  -> archivo WAV 16 bits (con dither) reproducido con Kivy
+                (SoundLoader). Es el método más compatible entre tabletas.
+                (_BackendAndroid con AudioTrack queda como alternativa futura.)
   * PC       -> sounddevice (PortAudio) en float32, para desarrollar en VS Code.
   * Nulo     -> si no hay tarjeta de sonido (pruebas automáticas).
 
@@ -192,9 +191,69 @@ class _BackendAndroid:
         return time.time() < self._hasta
 
 
+class _BackendWav:
+    """
+    Android (y respaldo general): escribe el sonido en un archivo WAV de 16 bits
+    y lo reproduce con el reproductor de audio de Kivy (SoundLoader).
+    Es el método más compatible: funciona en prácticamente cualquier tableta.
+    Se añade "dither" triangular para que los niveles bajos no se distorsionen.
+    """
+    nombre = "WAV + Kivy (Android)"
+
+    def __init__(self):
+        import tempfile
+        base = os.environ.get("ANDROID_PRIVATE") or tempfile.gettempdir()
+        self.carpeta = os.path.join(base, "uyariy_audio")
+        os.makedirs(self.carpeta, exist_ok=True)
+        self._sonido = None
+        self._hasta = 0.0
+        self._n = 0
+        self.ultimo_error = None
+
+    def _escribir_wav(self, buf, fs):
+        import wave
+        datos = np.ascontiguousarray(buf, dtype=np.float32).ravel()      # L,R,L,R...
+        ruido = (np.random.random(datos.size) - np.random.random(datos.size)) / 32768.0
+        pcm = np.clip(np.round((datos + ruido) * 32767), -32768, 32767).astype("<i2")
+        self._n = (self._n + 1) % 4                       # alterna archivos (evita caché)
+        ruta = os.path.join(self.carpeta, f"estimulo_{self._n}.wav")
+        with wave.open(ruta, "wb") as w:
+            w.setnchannels(2)
+            w.setsampwidth(2)
+            w.setframerate(int(fs))
+            w.writeframes(pcm.tobytes())
+        return ruta
+
+    def reproducir(self, buf, fs, bucle=False):
+        from kivy.core.audio import SoundLoader
+        self.detener()
+        ruta = self._escribir_wav(buf, fs)
+        sonido = SoundLoader.load(ruta)
+        if sonido is None:
+            raise RuntimeError("Kivy no pudo cargar el audio WAV")
+        sonido.loop = bool(bucle)
+        sonido.volume = 1.0
+        sonido.play()
+        self._sonido = sonido
+        self._hasta = float("inf") if bucle else time.time() + len(buf) / fs
+
+    def detener(self):
+        if self._sonido is not None:
+            try:
+                self._sonido.stop()
+                self._sonido.unload()
+            except Exception:
+                pass
+            self._sonido = None
+        self._hasta = 0.0
+
+    def sonando(self):
+        return time.time() < self._hasta
+
+
 def crear_backend():
     if EN_ANDROID:
-        return _BackendAndroid()
+        return _BackendWav()
     try:
         return _BackendPC()
     except Exception:
