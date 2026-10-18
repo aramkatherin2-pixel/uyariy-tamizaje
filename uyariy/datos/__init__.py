@@ -1,0 +1,1 @@
+"""Datos: pacientes y evaluaciones (SQLite)."""
