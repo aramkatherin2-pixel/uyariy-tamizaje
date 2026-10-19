@@ -1,7 +1,7 @@
 """
 Uyariy - Audiómetro de tamizaje para tableta.
 
-Paso 5: Registro del paciente (SQLite) -> Audiometría con audiograma en vivo y clasificación OMS.
+Paso 6: Registro -> Audiometría manual o automática (Hughson-Westlake) -> audiograma y clasificación OMS.
 Ejecutar:  python main.py
 """
 import os
@@ -14,6 +14,7 @@ from kivy.utils import platform
 from uyariy.audio.calibracion import Calibracion
 from uyariy.audio.motor import MotorAudio
 from uyariy.datos.pacientes import BaseDatos
+from uyariy.ui.automatica import PantallaAutomatica
 from uyariy.ui.banco_audio import PantallaAudio
 from uyariy.ui.historial import PantallaHistorial
 from uyariy.ui.registro import PantallaRegistro
@@ -37,8 +38,10 @@ class UyariyApp(App):
         self.historial = PantallaHistorial(self.bd, lambda: self.ir("registro"), self.nuevo_control,
                                            name="historial")
         self.audio = PantallaAudio(self.motor, lambda: self.ir("registro"), self.bd.guardar_resultados,
-                                   name="audio")
-        for p in (self.registro, self.historial, self.audio):
+                                   self.ir_automatica, name="audio")
+        self.auto = PantallaAutomatica(self.motor, self.fin_automatica, lambda: self.ir("audio"), name="auto")
+        self.codigo_auto = None
+        for p in (self.registro, self.historial, self.audio, self.auto):
             self.sm.add_widget(p)
         return self.sm
 
@@ -54,6 +57,17 @@ class UyariyApp(App):
         self.paciente = (paciente, codigo)
         self.audio.banco.mostrar_paciente(paciente, codigo)
         self.registro.limpiar()
+        self.ir("audio")
+
+    def ir_automatica(self):
+        paciente, codigo = self.paciente
+        if self.codigo_auto != codigo:          # paciente nuevo: prueba automática desde cero
+            self.auto.preparar(paciente)
+            self.codigo_auto = codigo
+        self.ir("auto")
+
+    def fin_automatica(self, umbrales, info):
+        self.audio.banco.cargar_automatico(umbrales, info)
         self.ir("audio")
 
     def on_pause(self):

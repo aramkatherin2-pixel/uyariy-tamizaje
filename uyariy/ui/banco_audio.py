@@ -5,6 +5,7 @@ Arriba: frecuencias. Centro: audiogramas derecho e izquierdo que se dibujan en v
 con su promedio tonal (PTA) y grado OMS. Abajo: nivel, oído, estímulo, presentación,
 enmascaramiento y los botones PRESENTAR / GUARDAR UMBRAL / SIN RESPUESTA / BORRAR.
 """
+import time
 from datetime import datetime
 
 from kivy.clock import Clock
@@ -13,6 +14,7 @@ from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
+from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import Screen
 from kivy.uix.togglebutton import ToggleButton
 
@@ -21,6 +23,7 @@ from ..audio.calibracion import NivelFueraDeRango
 from ..audio.generador import FRECUENCIAS_ESTANDAR
 from ..audio.motor import Enmascaramiento, Estimulo
 from ..clinica import clasificacion as C
+from ..clinica import seguridad as S
 from .audiograma import Audiograma
 from .estilo import AMBAR, AZUL, FONDO, GRIS_BTN, PANEL, ROJO, TEXTO_SUAVE, VERDE
 
@@ -91,12 +94,17 @@ class GrupoOpciones(BoxLayout):
 
 
 class BancoAudio(BoxLayout):
-    def __init__(self, motor, al_volver=None, al_guardar=None, **kw):
+    def __init__(self, motor, al_volver=None, al_guardar=None, al_auto=None, **kw):
         super().__init__(orientation="vertical", padding=dp(10), spacing=dp(6), **kw)
         fondo(self, FONDO)
         self.motor = motor
         self.al_volver = al_volver
         self.al_guardar = al_guardar            # función(codigo, resultados) -> bool
+        self.al_auto = al_auto                  # abre la audiometría automática
+        self.metodo, self.fiabilidad = "manual", None
+        self.alto_confirmado = False            # el evaluador aceptó pasar de 80 dB HL
+        self.expo = S.Exposicion()              # registro de exposición sonora
+        self._inicio_continuo, self._ev_continuo = None, None
         self.est = Estimulo(frecuencia=1000, dbhl=30, oido="D", tipo="tono", duracion=1.0)
         self.enm = Enmascaramiento(activo=False, dbem=40, tipo="nbn")
         self.modo = "pulso"
@@ -110,9 +118,11 @@ class BancoAudio(BoxLayout):
         volver.bind(on_release=self._volver)
         self.lbl_paciente = texto(f"[b]UYARIY[/b]  ·  Audiometría  ·  v{__version__}", "16sp", (1, 1, 1, 1))
         self.lbl_paciente.halign = "left"
+        self.btn_auto = boton("AUTOMÁTICO", (0.45, 0.35, 0.70, 1), bold=True, size_hint_x=None, width=dp(150))
+        self.btn_auto.bind(on_release=self._abrir_auto)
         self.btn_guardar_todo = boton("Guardar resultados", AZUL, bold=True, size_hint_x=None, width=dp(200))
         self.btn_guardar_todo.bind(on_release=self._guardar_resultados)
-        for w in (volver, self.lbl_paciente, self.btn_guardar_todo):
+        for w in (volver, self.lbl_paciente, self.btn_auto, self.btn_guardar_todo):
             cab.add_widget(w)
         self.add_widget(cab)
 
@@ -190,15 +200,17 @@ class BancoAudio(BoxLayout):
 
         # ----- botones principales
         acciones = BoxLayout(size_hint_y=None, height=dp(60), spacing=dp(8))
-        self.btn = boton("PRESENTAR TONO", VERDE, font_size="22sp", bold=True, size_hint_x=0.40)
+        self.btn = boton("PRESENTAR TONO", VERDE, font_size="22sp", bold=True, size_hint_x=0.34)
         self.btn.bind(on_release=self._presentar)
-        b_umbral = boton("GUARDAR UMBRAL", (0.10, 0.45, 0.70, 1), font_size="17sp", bold=True, size_hint_x=0.25)
+        b_umbral = boton("GUARDAR UMBRAL", (0.10, 0.45, 0.70, 1), font_size="17sp", bold=True, size_hint_x=0.22)
         b_umbral.bind(on_release=lambda *_: self._guardar_umbral(nr=False))
-        b_nr = boton("Sin respuesta", GRIS_BTN, font_size="15sp", size_hint_x=0.18)
+        b_nr = boton("Sin respuesta", GRIS_BTN, font_size="15sp", size_hint_x=0.16)
         b_nr.bind(on_release=lambda *_: self._guardar_umbral(nr=True))
-        b_borrar = boton("Borrar punto", GRIS_BTN, font_size="15sp", size_hint_x=0.17)
+        b_borrar = boton("Borrar punto", GRIS_BTN, font_size="15sp", size_hint_x=0.14)
         b_borrar.bind(on_release=self._borrar_umbral)
-        for w in (self.btn, b_umbral, b_nr, b_borrar):
+        b_parar = boton("PARAR", (0.75, 0.12, 0.15, 1), font_size="18sp", bold=True, size_hint_x=0.14)
+        b_parar.bind(on_release=lambda *_: self._parar())          # botón de pánico: corta todo el sonido
+        for w in (self.btn, b_umbral, b_nr, b_borrar, b_parar):
             acciones.add_widget(w)
         self.add_widget(acciones)
 
@@ -213,11 +225,22 @@ class BancoAudio(BoxLayout):
     # ---------------------------------------------------------- eventos
     def _cambiar_frecuencia(self, f):
         self.est.frecuencia = f
+        self._inicio_seguro()
         self._limitar()
 
     def _cambiar_oido(self, o):
         self.est.oido = o
+        self._inicio_seguro()
         self._limitar()
+
+    def _inicio_seguro(self):
+        """Al cambiar de frecuencia u oído, un nivel alto vuelve a 40 dB HL (seguridad)."""
+        self._parar(silencioso=True)
+        nuevo = S.nivel_al_cambiar(self.est.dbhl)
+        if nuevo != self.est.dbhl:
+            self.est.dbhl = nuevo
+            self.estado(f"Seguridad: el nivel vuelve a {nuevo} dB HL al cambiar de frecuencia u oído.")
+        self.alto_confirmado = False
 
     def _cambiar_tipo(self, t):
         self.est.tipo = t
@@ -235,11 +258,42 @@ class BancoAudio(BoxLayout):
         self._refrescar()
 
     def _cambiar_nivel(self, d):
-        self.est.dbhl += d
+        d = S.paso_permitido(self.est.dbhl, d)
+        nuevo = self.est.dbhl + d
+        if S.necesita_confirmacion(nuevo, self.alto_confirmado):
+            self._confirmar_alto(nuevo)
+            return
+        self.est.dbhl = nuevo
         self._limitar()
 
+    def _confirmar_alto(self, nuevo):
+        """Pide confirmación antes de pasar el límite seguro de 80 dB HL."""
+        caja = BoxLayout(orientation="vertical", padding=dp(14), spacing=dp(12))
+        caja.add_widget(texto(f"Va a subir a [b]{nuevo} dB HL[/b], por encima del límite seguro de "
+                              f"{S.LIMITE_SEGURO} dB HL.\n\nUse niveles altos solo si el paciente no respondió "
+                              "antes y pídale que levante la mano o se quite los audífonos si le molesta.",
+                              "16sp", (1, 1, 1, 1)))
+        fila = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(10))
+        si = boton("Sí, subir con cuidado", ROJO, bold=True)
+        no = boton("Cancelar", GRIS_BTN)
+        fila.add_widget(no)
+        fila.add_widget(si)
+        caja.add_widget(fila)
+        pop = Popup(title="(!) Nivel alto", content=caja, size_hint=(0.6, 0.5), auto_dismiss=False)
+
+        def aceptar(*_):
+            self.alto_confirmado = True
+            self.est.dbhl = nuevo
+            pop.dismiss()
+            self._limitar()
+        si.bind(on_release=aceptar)
+        no.bind(on_release=lambda *_: pop.dismiss())
+        pop.open()
+
     def _cambiar_enm_nivel(self, d):
-        self.enm.dbem = max(-10, self.enm.dbem + d)
+        self.enm.dbem = max(-10, min(self.enm.dbem + d, S.MAX_ENMASCARAMIENTO))
+        if self.enm.dbem == S.MAX_ENMASCARAMIENTO and d > 0:
+            self.estado(f"Seguridad: el enmascaramiento máximo es {S.MAX_ENMASCARAMIENTO} dB EM.")
         self._refrescar()
 
     def _limitar(self):
@@ -249,14 +303,24 @@ class BancoAudio(BoxLayout):
 
     # ------------------------------------------------------- reproducción
     def _presentar(self, *_):
-        if self.modo == "continuo" and self.motor.sonando():
-            self.motor.detener()
-            self._refrescar()
+        continuo = self.modo == "continuo"
+        if continuo and self.motor.sonando():
+            self._parar()
+            return
+        if continuo and self.est.dbhl > S.LIMITE_SEGURO:
+            self.estado(f"Seguridad: el tono continuo no se permite por encima de {S.LIMITE_SEGURO} dB HL. "
+                        "Use Pulso o Pulsado.")
             return
         self.est.pulsado = self.modo == "pulsado"
         self.est.duracion = 3.0 if self.modo == "pulsado" else 1.0
         try:
-            self.motor.presentar(self.est, self.enm, continuo=(self.modo == "continuo"))
+            self.motor.presentar(self.est, self.enm, continuo=continuo)
+            if continuo:                       # se apaga solo a los 10 s
+                self._inicio_continuo = time.time()
+                self._ev_continuo = Clock.schedule_once(lambda dt: self._parar(aviso="Continuo detenido a los "
+                                                        f"{S.MAX_CONTINUO_S} s (seguridad)."), S.MAX_CONTINUO_S)
+            else:
+                self.expo.registrar(self._nivel_expuesto(), self.est.duracion)
             self.estado(f"Sonando: {self.est.frecuencia} Hz · {self.est.dbhl:.0f} dB HL · oído {self.est.oido}"
                         + (f" · enmasc. {self.enm.dbem:.0f} dB EM" if self.enm.activo else ""))
         except NivelFueraDeRango as e:
@@ -264,6 +328,22 @@ class BancoAudio(BoxLayout):
         except Exception as e:
             self.estado(f"[ERROR de audio] {type(e).__name__}: {e}")
         self._refrescar()
+
+    def _nivel_expuesto(self):
+        return max(self.est.dbhl, self.enm.dbem if self.enm.activo else -99)
+
+    def _parar(self, aviso="Sonido detenido.", silencioso=False):
+        """Botón de pánico: corta todo el sonido al instante."""
+        self.motor.detener()
+        if self._ev_continuo:
+            self._ev_continuo.cancel()
+            self._ev_continuo = None
+        if self._inicio_continuo:
+            self.expo.registrar(self._nivel_expuesto(), time.time() - self._inicio_continuo)
+            self._inicio_continuo = None
+        if not silencioso:
+            self.estado(aviso)
+            self._refrescar()
 
     def _vigilar(self, _dt):
         sonando = self.motor.sonando()
@@ -306,8 +386,29 @@ class BancoAudio(BoxLayout):
                 return
 
     def resultado(self):
-        return C.evaluar(self.umbrales["D"], self.umbrales["I"], self.paciente.get("edad"),
-                         self.paciente.get("antecedentes", []))
+        r = C.evaluar(self.umbrales["D"], self.umbrales["I"], self.paciente.get("edad"),
+                      self.paciente.get("antecedentes", []))
+        if self.fiabilidad and not self.fiabilidad["confiable"]:
+            r["avisos"] = r["avisos"] + ["Poco confiable: " + "; ".join(self.fiabilidad["mensajes"])]
+        return r
+
+    # ------------------------------------------------------- automático
+    def _abrir_auto(self, *_):
+        self.motor.detener()
+        if not self.codigo:
+            self.estado("[!] Primero registra un paciente.")
+            return
+        if self.al_auto:
+            self.al_auto()
+
+    def cargar_automatico(self, umbrales, info):
+        """Recibe los umbrales de la prueba automática para revisarlos y guardarlos."""
+        for o in ("D", "I"):
+            self.umbrales[o].update(umbrales.get(o, {}))
+        self.metodo, self.fiabilidad = "automatico", info
+        self.estado("Resultado de la prueba automática cargado. Revise el audiograma y presione Guardar resultados."
+                    + ("" if info["confiable"] else "  (!) " + "; ".join(info["mensajes"])))
+        self._refrescar()
 
     def _guardar_resultados(self, *_):
         if not self.codigo:
@@ -316,21 +417,27 @@ class BancoAudio(BoxLayout):
         r = self.resultado()
         datos = dict(r, umbrales={o: C.a_json(u) for o, u in self.umbrales.items()},
                      estimulo=self.est.tipo, calibracion=self.motor.calibracion.nombre,
+                     metodo=self.metodo, fiabilidad=self.fiabilidad, exposicion=self.expo.a_dict(),
                      fecha=datetime.now().isoformat(timespec="minutes"))
         ok = self.al_guardar(self.codigo, datos) if self.al_guardar else False
         self.estado(f"Resultados guardados en {self.codigo}: {r['veredicto']}" if ok else "[!] No se pudo guardar.")
 
     # ------------------------------------------------------- pantalla
     def estado(self, t):
-        self.lbl_estado.text = t
+        if hasattr(self, "lbl_estado"):
+            self.lbl_estado.text = t
 
     def _refrescar(self):
         if not self._listo:
             return
         maximo = self.motor.maximo(self.est.frecuencia, self.est.oido)
         col = {"D": "ff6b6b", "I": "6ba4ff", "DI": "b39ddb"}[self.est.oido]
+        riesgo = "%02x%02x%02x" % tuple(int(c * 255) for c in S.color_nivel(self.est.dbhl)[:3])
         self.lbl_nivel.text = f"[color={col}]{self.est.dbhl:.0f}[/color] [size=20sp]dB HL[/size]"
-        self.lbl_max.text = f"Máximo a {self.est.frecuencia} Hz: {maximo:.0f} dB HL"
+        etiqueta = ("NIVEL ALTO" if self.est.dbhl >= S.NIVEL_PELIGRO else
+                    "PRECAUCIÓN" if self.est.dbhl >= S.NIVEL_AVISO else "SEGURO")
+        self.lbl_max.text = (f"[b][color={riesgo}]{etiqueta}[/color][/b]  ·  límite {S.LIMITE_SEGURO}  ·  "
+                             f"máx. equipo {maximo:.0f} dB HL")
         self.lbl_enm.text = f"{self.enm.dbem:.0f} dB EM" if self.enm.activo else "apagado"
         for o in ("D", "I"):
             cursor = (self.est.frecuencia, self.est.dbhl) if self.est.oido in (o, "DI") else None
@@ -346,13 +453,18 @@ class BancoAudio(BoxLayout):
             self.lbl_pta[o].fondo.rgba = color if p is not None else (ROJO if o == "D" else AZUL)
         texto_v = f"[b]{r['veredicto']}[/b]  ·  " + "  ·  ".join(r["motivos"])
         if r["avisos"]:
-            texto_v += "   [color=ffe08a]⚠ " + "; ".join(r["avisos"]) + "[/color]"
+            texto_v += "   [color=ffe08a](!) " + "; ".join(r["avisos"]) + "[/color]"
         self.lbl_veredicto.text = texto_v
         self.fondo_veredicto.rgba = COLOR_VEREDICTO[r["veredicto"]]
 
     def mostrar_paciente(self, p, codigo):
         self.paciente, self.codigo = p, codigo
         self.umbrales = {"D": {}, "I": {}}
+        self.metodo, self.fiabilidad = "manual", None
+        self._parar(silencioso=True)
+        self.expo = S.Exposicion()
+        self.alto_confirmado = False
+        self.est.dbhl = 30                     # siempre empieza en un nivel seguro
         nombre = f"{p['nombres']} {p.get('ap_paterno', '')} {p.get('ap_materno', '')}".split()
         self.lbl_paciente.text = (f"[b]{' '.join(nombre)}[/b]  ·  {p.get('edad', '')} años  ·  "
                                   f"{'Femenino' if p.get('sexo') == 'F' else 'Masculino'}\n"
@@ -363,15 +475,15 @@ class BancoAudio(BoxLayout):
         self._refrescar()
 
     def _volver(self, *_):
-        self.motor.detener()
+        self._parar(silencioso=True)
         if self.al_volver:
             self.al_volver()
 
 
 class PantallaAudio(Screen):
-    def __init__(self, motor, al_volver, al_guardar=None, **kw):
+    def __init__(self, motor, al_volver, al_guardar=None, al_auto=None, **kw):
         super().__init__(**kw)
-        self.banco = BancoAudio(motor, al_volver, al_guardar)
+        self.banco = BancoAudio(motor, al_volver, al_guardar, al_auto)
         self.add_widget(self.banco)
 
     def on_leave(self, *_):
