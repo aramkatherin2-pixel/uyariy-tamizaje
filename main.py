@@ -1,7 +1,7 @@
 """
 Uyariy - Audiómetro de tamizaje para tableta.
 
-Paso 4: Registro del paciente (SQLite) -> Audiometría (motor de audio).
+Paso 5: Registro del paciente (SQLite) -> Audiometría con audiograma en vivo y clasificación OMS.
 Ejecutar:  python main.py
 """
 import os
@@ -36,7 +36,8 @@ class UyariyApp(App):
         self.registro = PantallaRegistro(self.bd, self.ir_audio, lambda: self.ir("historial"), name="registro")
         self.historial = PantallaHistorial(self.bd, lambda: self.ir("registro"), self.nuevo_control,
                                            name="historial")
-        self.audio = PantallaAudio(self.motor, lambda: self.ir("registro"), name="audio")
+        self.audio = PantallaAudio(self.motor, lambda: self.ir("registro"), self.bd.guardar_resultados,
+                                   name="audio")
         for p in (self.registro, self.historial, self.audio):
             self.sm.add_widget(p)
         return self.sm

@@ -1,0 +1,1 @@
+"""Criterios clínicos: promedio tonal, clasificación OMS y derivación."""

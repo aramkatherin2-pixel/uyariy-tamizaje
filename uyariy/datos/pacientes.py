@@ -165,11 +165,22 @@ class BaseDatos:
         self.con.commit()
         return pid, codigo
 
+    def guardar_resultados(self, codigo, resultados):
+        """Guarda (o reemplaza) los resultados de la audiometría de una evaluación."""
+        cur = self.con.execute("UPDATE evaluaciones SET resultados=? WHERE codigo=?",
+                               (json.dumps(resultados, ensure_ascii=False), codigo))
+        self.con.commit()
+        return cur.rowcount == 1
+
+    def leer_resultados(self, codigo):
+        fila = self.con.execute("SELECT resultados FROM evaluaciones WHERE codigo=?", (codigo,)).fetchone()
+        return json.loads(fila[0]) if fila and fila[0] else None
+
     def historial(self, texto=""):
         """Últimas evaluaciones (más recientes primero), filtrando por nombre o C.I."""
         filtro = f"%{texto.strip()}%"
         filas = self.con.execute(
-            """SELECT e.codigo, e.fecha, e.edad, e.motivo, p.ci, p.ci_ext, p.nombres,
+            """SELECT e.codigo, e.fecha, e.edad, e.motivo, e.resultados, p.ci, p.ci_ext, p.nombres,
                       p.ap_paterno, p.ap_materno, p.sexo, p.comunidad
                FROM evaluaciones e JOIN pacientes p ON p.id = e.paciente_id
                WHERE p.ci LIKE ? OR p.nombres LIKE ? OR p.ap_paterno LIKE ? OR p.ap_materno LIKE ?
