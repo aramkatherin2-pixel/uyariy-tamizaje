@@ -1,0 +1,1 @@
+"""Informe de resultados en PDF."""

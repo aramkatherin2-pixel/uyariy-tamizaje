@@ -5,7 +5,7 @@ package.domain = bo.univalle
 source.dir = .
 source.include_exts = py,png,jpg,kv,json,wav
 source.exclude_dirs = .venv,tests,bin,.buildozer,__pycache__,.pytest_cache
-version = 0.5.0
+version = 0.6.0
 requirements = python3,kivy==2.3.1,numpy,pyjnius,sqlite3
 orientation = landscape
 fullscreen = 1

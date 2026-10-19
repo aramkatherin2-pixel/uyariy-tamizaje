@@ -1,7 +1,7 @@
 """
 Uyariy - Audiómetro de tamizaje para tableta.
 
-Paso 6: Registro -> Audiometría manual o automática (Hughson-Westlake) -> audiograma y clasificación OMS.
+Paso 7: Registro -> Audiometría manual o automática -> Resultados e informe PDF.
 Ejecutar:  python main.py
 """
 import os
@@ -18,6 +18,7 @@ from uyariy.ui.automatica import PantallaAutomatica
 from uyariy.ui.banco_audio import PantallaAudio
 from uyariy.ui.historial import PantallaHistorial
 from uyariy.ui.registro import PantallaRegistro
+from uyariy.ui.resultados import PantallaResultados
 
 if platform not in ("android", "ios"):
     Window.size = (1280, 800)
@@ -37,11 +38,13 @@ class UyariyApp(App):
         self.registro = PantallaRegistro(self.bd, self.ir_audio, lambda: self.ir("historial"), name="registro")
         self.historial = PantallaHistorial(self.bd, lambda: self.ir("registro"), self.nuevo_control,
                                            name="historial")
-        self.audio = PantallaAudio(self.motor, lambda: self.ir("registro"), self.bd.guardar_resultados,
+        self.audio = PantallaAudio(self.motor, lambda: self.ir("registro"), self.guardar_y_ver,
                                    self.ir_automatica, name="audio")
         self.auto = PantallaAutomatica(self.motor, self.fin_automatica, lambda: self.ir("audio"), name="auto")
+        self.resultados = PantallaResultados(self.bd, self.user_data_dir, lambda: self.ir("audio"),
+                                             lambda: self.ir("registro"), name="resultados")
         self.codigo_auto = None
-        for p in (self.registro, self.historial, self.audio, self.auto):
+        for p in (self.registro, self.historial, self.audio, self.auto, self.resultados):
             self.sm.add_widget(p)
         return self.sm
 
@@ -69,6 +72,15 @@ class UyariyApp(App):
     def fin_automatica(self, umbrales, info):
         self.audio.banco.cargar_automatico(umbrales, info)
         self.ir("audio")
+
+    def guardar_y_ver(self, codigo, datos):
+        """Guarda los resultados y abre la pantalla de resultados e informe."""
+        ok = self.bd.guardar_resultados(codigo, datos)
+        if ok:
+            paciente, _ = self.paciente
+            self.resultados.mostrar(paciente, codigo, datos)
+            self.ir("resultados")
+        return ok
 
     def on_pause(self):
         self.motor.detener()
