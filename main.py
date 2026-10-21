@@ -1,7 +1,8 @@
 """
 Uyariy - Audiómetro de tamizaje para tableta.
 
-Paso 7: Registro -> Audiometría manual o automática -> Resultados e informe PDF.
+Paso 8: Registro -> Audiometría manual o automática -> Resultados e informe PDF
+        + Historial con exportar / importar respaldos (tablet <-> laptop).
 Ejecutar:  python main.py
 """
 import os
@@ -36,7 +37,7 @@ class UyariyApp(App):
 
         self.sm = ScreenManager(transition=NoTransition())
         self.registro = PantallaRegistro(self.bd, self.ir_audio, lambda: self.ir("historial"), name="registro")
-        self.historial = PantallaHistorial(self.bd, lambda: self.ir("registro"), self.nuevo_control,
+        self.historial = PantallaHistorial(self.bd, self.user_data_dir, lambda: self.ir("registro"), self.nuevo_control,
                                            name="historial")
         self.audio = PantallaAudio(self.motor, lambda: self.ir("registro"), self.guardar_y_ver,
                                    self.ir_automatica, name="audio")
